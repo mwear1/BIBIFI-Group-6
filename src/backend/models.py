@@ -106,11 +106,16 @@ VALID_EVENT_TYPES = {
 }
 
 class GalleryEvent(db.Model):
-    # Validate event types before storing them.
-    def is_valid_event_type(self):
-        return self.event_type in VALID_EVENT_TYPES
-    
     __tablename__ = "gallery_events"
+
+    # Restrict events to the four supported movement types.
+    __table_args__ = (
+        db.CheckConstraint(
+            "event_type IN "
+            "('GALLERY_ENTER', 'GALLERY_EXIT', 'ROOM_ENTER', 'ROOM_EXIT')",
+            name="ck_gallery_events_event_type"
+        ),
+    )
 
     event_id = db.Column(db.Integer, primary_key=True)
 
@@ -121,7 +126,7 @@ class GalleryEvent(db.Model):
         nullable=False
     )
 
-    # Room is only needed for room entry/exit events.
+    # Room is only required for room-specific events.
     room_id = db.Column(
         db.Integer,
         db.ForeignKey("rooms.room_id"),
@@ -135,21 +140,20 @@ class GalleryEvent(db.Model):
         nullable=False
     )
 
-    # Expected values:
-    # GALLERY_ENTER, GALLERY_EXIT, ROOM_ENTER, ROOM_EXIT
     event_type = db.Column(db.String(30), nullable=False)
 
-    # Automatically record when the event was created.
     timestamp = db.Column(
         db.DateTime,
         nullable=False,
         server_default=db.func.now()
     )
 
-    # Relationships make related objects easier to access.
     person = db.relationship("Person", backref="gallery_events")
     room = db.relationship("Room", backref="gallery_events")
     user = db.relationship("User", backref="recorded_events")
+
+    def is_valid_event_type(self):
+        return self.event_type in VALID_EVENT_TYPES
 
     def __repr__(self):
         return f"<GalleryEvent {self.event_type}>"
@@ -157,38 +161,34 @@ class GalleryEvent(db.Model):
 class AuditLog(db.Model):
     __tablename__ = "audit_logs"
 
+    # Audit results must have a known status.
+    __table_args__ = (
+        db.CheckConstraint(
+            "result IN ('SUCCESS', 'FAILURE')",
+            name="ck_audit_logs_result"
+        ),
+    )
+
     audit_id = db.Column(db.Integer, primary_key=True)
 
-    # User responsible for the action, when known.
     user_id = db.Column(
         db.Integer,
         db.ForeignKey("users.user_id"),
         nullable=True
     )
 
-    # Short description of the action performed.
     action = db.Column(db.String(100), nullable=False)
-
-    # Type of object affected, such as User, Room, or GalleryEvent.
     target_type = db.Column(db.String(50))
-
-    # ID of the affected object when applicable.
     target_id = db.Column(db.Integer)
-
-    # Result of the action, such as SUCCESS or FAILURE.
     result = db.Column(db.String(20), nullable=False)
-
-    # Additional non-sensitive details about the event.
     details = db.Column(db.Text)
 
-    # Automatically records when the audit event occurred.
     timestamp = db.Column(
         db.DateTime,
         nullable=False,
         server_default=db.func.now()
     )
 
-    # Allows access to the related User object through audit.user.
     user = db.relationship("User", backref="audit_logs")
 
     def __repr__(self):
