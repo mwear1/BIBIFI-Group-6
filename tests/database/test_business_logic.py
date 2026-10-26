@@ -14,7 +14,16 @@ from services import (
     record_gallery_entry,
     record_gallery_exit,
     record_room_entry,
-    record_room_exit
+    record_room_exit,
+    get_gallery_occupancy,
+    get_room_occupancy,
+    get_person_location,
+    get_event_history,
+    create_user,
+    disable_user,
+    change_user_role,
+    create_room,
+    create_person
 )
 
 @pytest.fixture
@@ -82,6 +91,14 @@ def test_data(app):
         )
         employee_user.set_password("Employee123!")
 
+        admin_user = User(
+            username="admin1",
+            role_id=admin_role.role_id,
+            full_name="Test Administrator",
+            email="admin@example.com"
+        )
+        admin_user.set_password("Admin123!")
+
         person = Person(
             name="Alice Johnson",
             identifier="GUEST-001"
@@ -100,6 +117,7 @@ def test_data(app):
         db.session.add_all([
             guest_user,
             employee_user,
+            admin_user,
             person,
             room_one,
             room_two
@@ -110,6 +128,7 @@ def test_data(app):
         return {
             "guest": guest_user.user_id,
             "employee": employee_user.user_id,
+            "admin": admin_user.user_id,
             "person": person.person_id,
             "room_one": room_one.room_id,
             "room_two": room_two.room_id
@@ -366,3 +385,267 @@ def test_database_rejects_invalid_audit_result(app, test_data):
             db.session.commit()
 
         db.session.rollback()
+
+def test_gallery_occupancy(app, test_data):
+    """Gallery occupancy should include only people currently inside."""
+
+    with app.app_context():
+        assert len(get_gallery_occupancy()) == 0
+
+        record_gallery_entry(
+            test_data["person"],
+            test_data["employee"]
+        )
+
+        occupants = get_gallery_occupancy()
+
+        assert len(occupants) == 1
+        assert occupants[0].person_id == test_data["person"]
+
+        record_gallery_exit(
+            test_data["person"],
+            test_data["employee"]
+        )
+
+        assert len(get_gallery_occupancy()) == 0
+
+def test_room_occupancy(app, test_data):
+    """Room occupancy should reflect current room state."""
+
+    with app.app_context():
+        record_gallery_entry(
+            test_data["person"],
+            test_data["employee"]
+        )
+
+        record_room_entry(
+            test_data["person"],
+            test_data["room_one"],
+            test_data["employee"]
+        )
+
+        occupants = get_room_occupancy(
+            test_data["room_one"]
+        )
+
+        assert len(occupants) == 1
+        assert occupants[0].person_id == test_data["person"]
+
+        record_room_exit(
+            test_data["person"],
+            test_data["room_one"],
+            test_data["employee"]
+        )
+
+        assert len(
+            get_room_occupancy(test_data["room_one"])
+        ) == 0
+
+def test_person_location(app, test_data):
+    """Person location should change with gallery movement."""
+
+    with app.app_context():
+        location = get_person_location(
+            test_data["person"]
+        )
+
+        assert location["status"] == "OUTSIDE"
+        assert location["room"] is None
+
+        record_gallery_entry(
+            test_data["person"],
+            test_data["employee"]
+        )
+
+        location = get_person_location(
+            test_data["person"]
+        )
+
+        assert location["status"] == "IN_GALLERY"
+
+        record_room_entry(
+            test_data["person"],
+            test_data["room_one"],
+            test_data["employee"]
+        )
+
+        location = get_person_location(
+            test_data["person"]
+        )
+
+        assert location["status"] == "IN_ROOM"
+        assert location["room"].room_id == test_data["room_one"]
+
+def test_event_history_filters(app, test_data):
+    """Event history should support person and event-type filters."""
+
+    with app.app_context():
+        record_gallery_entry(
+            test_data["person"],
+            test_data["employee"]
+        )
+
+        record_room_entry(
+            test_data["person"],
+            test_data["room_one"],
+            test_data["employee"]
+        )
+
+        events = get_event_history(
+            person_id=test_data["person"]
+        )
+
+        assert len(events) == 2
+
+        room_entries = get_event_history(
+            person_id=test_data["person"],
+            event_type="ROOM_ENTER"
+        )
+
+        assert len(room_entries) == 1
+        assert room_entries[0].event_type == "ROOM_ENTER"
+        assert room_entries[0].room_id == test_data["room_one"]
+
+def test_event_history_rejects_invalid_limit(app, test_data):
+    """Historical searches should reject excessive result limits."""
+
+    with app.app_context():
+        with pytest.raises(
+            ValueError,
+            match="between 1 and 500"
+        ):
+            get_event_history(limit=10000)
+
+def test_admin_can_create_user(app, test_data):
+    """Administrators should be able to create secure user accounts."""
+
+    with app.app_context():
+        user = create_user(
+            username="newemployee",
+            password="SecurePass123!",
+            role_name="Employee",
+            admin_user_id=test_data["admin"],
+            full_name="New Employee",
+            email="newemployee@example.com"
+        )
+
+        assert user.username == "newemployee"
+        assert user.role.name == "Employee"
+        assert user.password_hash != "SecurePass123!"
+        assert user.check_password("SecurePass123!") is True
+
+        audit = AuditLog.query.filter_by(
+            action="USER_CREATED"
+        ).first()
+
+        assert audit is not None
+        assert audit.target_id == user.user_id
+
+
+def test_employee_cannot_create_user(app, test_data):
+    """Employees cannot perform Administrator-only user management."""
+
+    with app.app_context():
+        with pytest.raises(
+            PermissionError,
+            match="Administrator privileges"
+        ):
+            create_user(
+                username="unauthorized",
+                password="SecurePass123!",
+                role_name="Employee",
+                admin_user_id=test_data["employee"]
+            )
+
+
+def test_admin_can_change_user_role(app, test_data):
+    """Administrators should be able to change assigned roles."""
+
+    with app.app_context():
+        user = change_user_role(
+            target_user_id=test_data["guest"],
+            new_role_name="Employee",
+            admin_user_id=test_data["admin"]
+        )
+
+        assert user.role.name == "Employee"
+
+        audit = AuditLog.query.filter_by(
+            action="ROLE_CHANGED"
+        ).first()
+
+        assert audit is not None
+        assert audit.target_id == test_data["guest"]
+
+
+def test_admin_can_disable_user(app, test_data):
+    """Administrators should be able to disable user accounts."""
+
+    with app.app_context():
+        user = disable_user(
+            target_user_id=test_data["guest"],
+            admin_user_id=test_data["admin"]
+        )
+
+        assert user.is_active is False
+
+        audit = AuditLog.query.filter_by(
+            action="USER_DISABLED"
+        ).first()
+
+        assert audit is not None
+
+
+def test_admin_cannot_disable_self(app, test_data):
+    """Administrators should not disable their own account."""
+
+    with app.app_context():
+        with pytest.raises(
+            ValueError,
+            match="cannot disable their own account"
+        ):
+            disable_user(
+                target_user_id=test_data["admin"],
+                admin_user_id=test_data["admin"]
+            )
+
+
+def test_admin_can_create_room(app, test_data):
+    """Administrators should be able to create gallery rooms."""
+
+    with app.app_context():
+        room = create_room(
+            name="Sculpture Gallery",
+            description="Sculpture exhibits",
+            capacity=35,
+            admin_user_id=test_data["admin"]
+        )
+
+        assert room.name == "Sculpture Gallery"
+        assert room.capacity == 35
+
+        audit = AuditLog.query.filter_by(
+            action="ROOM_CREATED"
+        ).first()
+
+        assert audit is not None
+
+
+def test_admin_can_create_person(app, test_data):
+    """Administrators should be able to create tracked persons."""
+
+    with app.app_context():
+        person = create_person(
+            name="Bob Smith",
+            identifier="GUEST-002",
+            admin_user_id=test_data["admin"]
+        )
+
+        assert person.name == "Bob Smith"
+        assert person.identifier == "GUEST-002"
+
+        audit = AuditLog.query.filter_by(
+            action="PERSON_CREATED"
+        ).first()
+
+        assert audit is not None

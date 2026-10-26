@@ -128,4 +128,4 @@ Current database test coverage includes:
 - Schema creation
 - Seed-data creation and duplicate protection
 
-The current database test suite contains **14 passing tests**.
+The current database test suite contains **26 passing tests**.
