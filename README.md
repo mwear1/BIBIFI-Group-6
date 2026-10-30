@@ -242,6 +242,54 @@ The service layer prevents invalid gallery states, including:
 Successful movement events and their audit records are committed together in a database transaction.
 Movement operations acquire the SQLite write lock before checking current state, so concurrent conflicting requests are validated in sequence.
 
+## Docker Setup
+
+Docker Compose can be used as an alternative to the local Python virtual-environment setup.
+
+Set a Flask secret key in PowerShell:
+
+```powershell
+$env:FLASK_SECRET_KEY = py -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Build the application image:
+
+```powershell
+docker compose build
+```
+
+Create the initial Administrator account:
+
+```powershell
+docker compose run --rm web python -m flask --app src/backend/app.py create-admin
+```
+
+Start the application:
+
+```powershell
+docker compose up -d
+```
+
+The application will be available at:
+
+```text
+http://127.0.0.1:5000
+```
+
+Run the automated test suite inside Docker:
+
+```powershell
+docker compose run --rm web python -m pytest -v
+```
+
+Stop the application:
+
+```powershell
+docker compose down
+```
+
+The SQLite application database is stored in the Docker named volume `gallery_instance`, so application data persists when containers are stopped or recreated.
+
 ## Tests
 
 The tests use temporary in-memory SQLite databases and do not modify the development database. Run the test suite from the project root with:
