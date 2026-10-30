@@ -204,9 +204,14 @@ def apply_security_controls(response):
         "Permissions-Policy",
         "camera=(), microphone=(), geolocation=()",
     )
-    if request.path.startswith("/api/"):
+    # Prevent caching of API responses and authenticated pages.
+    if (
+        request.path.startswith("/api/")
+        or getattr(g, "current_user", None) is not None
+    ):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
+
     if app.config["APP_ENV"] == "production":
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
 

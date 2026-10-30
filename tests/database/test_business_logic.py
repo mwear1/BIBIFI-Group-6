@@ -386,6 +386,24 @@ def test_database_rejects_invalid_audit_result(app, test_data):
 
         db.session.rollback()
 
+def test_database_rejects_invalid_foreign_key(app, test_data):
+    """SQLite should enforce foreign-key relationships."""
+
+    with app.app_context():
+        invalid_event = GalleryEvent(
+            person_id=999999,
+            room_id=None,
+            user_id=test_data["employee"],
+            event_type="GALLERY_ENTER"
+        )
+
+        db.session.add(invalid_event)
+
+        with pytest.raises(Exception):
+            db.session.commit()
+
+        db.session.rollback()
+
 def test_gallery_occupancy(app, test_data):
     """Gallery occupancy should include only people currently inside."""
 

@@ -448,3 +448,46 @@ def test_concurrent_room_entries_cannot_exceed_capacity(file_backed_api_app):
             event_type="ROOM_ENTER",
         ).all()
         assert len(room_entries) == 1
+
+
+def test_last_active_admin_cannot_demote_self(api_app):
+    """The system must retain at least one active Administrator."""
+
+    application, data = api_app
+    admin = application.test_client()
+
+    auth = login(
+        admin,
+        "admin",
+        "Administrator-password-123"
+    )
+
+    assert auth.status_code == 200
+
+    response = admin.put(
+        f"/api/admin/users/{data['users']['admin']}/role",
+        json={"role": "Guest"},
+        headers={
+            "X-CSRF-Token": auth.json["csrf_token"]
+        }
+    )
+
+    assert response.status_code == 400
+    assert response.json == {
+        "error": "The last active Administrator cannot be demoted."
+    }
+
+    # Rejected change should not destroy the current session.
+    still_authenticated = admin.get("/api/auth/me")
+
+    assert still_authenticated.status_code == 200
+    assert still_authenticated.json["user"]["role"] == "Administrator"
+
+    with application.app_context():
+        admin_user = db.session.get(
+            User,
+            data["users"]["admin"]
+        )
+
+        assert admin_user.is_active is True
+        assert admin_user.role.name == "Administrator"

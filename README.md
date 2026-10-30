@@ -20,6 +20,14 @@ The application provides a browser dashboard for gallery staff and administrator
 - SQLite
 - Werkzeug password hashing
 
+## Architecture
+
+The application follows:
+
+**Browser → Flask Web Application / REST API → SQLAlchemy → SQLite**
+
+Jinja templates and JavaScript provide the browser interface. Flask handles authentication, authorization, validation, API routes, and business logic. SQLAlchemy manages persistent data in SQLite.
+
 ## Roles
 
 - **Guest** - Can log in and view their own account information.
@@ -242,6 +250,8 @@ The tests use temporary in-memory SQLite databases and do not modify the develop
 .\.venv\Scripts\python.exe -m pytest -v
 ```
 
+The current automated test suite contains 73 passing tests.
+
 Current tests cover:
 
 - Successful login, generic failed-login responses, persistent login throttling, and authentication audit records.
@@ -253,4 +263,9 @@ Current tests cover:
 - Role-matrix checks, privilege-field allowlisting, SQL-injection payload handling, XSS-safe rendering, security headers, information-disclosure handling, production-cookie configuration, and append-only audit behavior.
 - Database schema and seed data, business-logic validation, valid movement sequences, event ordering, audit logging, and database constraints.
 
+## Known Limitations
 
+- The application currently uses SQLite and is intended for the course project and small-scale deployment.
+- The built-in Flask development server is intended for local development only; a production deployment should use HTTPS and an appropriate production WSGI server.
+- The application does not provide password-reset or email-verification functionality.
+- Room and gallery movement events are entered manually by authorized staff rather than integrated with physical badge readers or access-control hardware.

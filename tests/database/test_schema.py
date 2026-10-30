@@ -1,4 +1,5 @@
 import sqlite3
+import pytest
 from pathlib import Path
 
 
@@ -90,3 +91,59 @@ def test_seed_can_run_twice_without_duplicates():
     assert role_count == 3
 
     connection.close()
+
+def test_schema_makes_audit_logs_append_only():
+    """schema.sql should prevent direct audit-log updates and deletes."""
+
+    connection = create_test_database()
+
+    connection.execute(
+        """
+        INSERT INTO audit_logs (
+            user_id,
+            action,
+            target_type,
+            target_id,
+            result,
+            details
+        )
+        VALUES (
+            NULL,
+            'TEST_ACTION',
+            'Test',
+            1,
+            'SUCCESS',
+            'Append-only test'
+        );
+        """
+    )
+    connection.commit()
+
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="audit logs are append-only"
+    ):
+        connection.execute(
+            """
+            UPDATE audit_logs
+            SET details = 'Modified'
+            WHERE audit_id = 1;
+            """
+        )
+
+    connection.rollback()
+
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="audit logs are append-only"
+    ):
+        connection.execute(
+            """
+            DELETE FROM audit_logs
+            WHERE audit_id = 1;
+            """
+        )
+
+    connection.rollback()
+    connection.close()
+    

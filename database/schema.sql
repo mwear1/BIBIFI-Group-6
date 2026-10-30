@@ -120,3 +120,16 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     FOREIGN KEY (user_id)
         REFERENCES users(user_id)
 );
+
+-- Keep audit records append-only, even for direct SQL access.
+CREATE TRIGGER IF NOT EXISTS prevent_audit_logs_update
+BEFORE UPDATE ON audit_logs
+BEGIN
+    SELECT RAISE(ABORT, 'audit logs are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_audit_logs_delete
+BEFORE DELETE ON audit_logs
+BEGIN
+    SELECT RAISE(ABORT, 'audit logs are append-only');
+END;

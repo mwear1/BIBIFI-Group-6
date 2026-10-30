@@ -574,8 +574,29 @@ def change_user_role(target_user_id, new_role_name, admin_user_id):
         if new_role is None:
             raise ValueError("Invalid or inactive role.")
 
-        old_role = target_user.role.name
+        # Prevent removal of the final active Administrator account.
+        if (
+            target_user.is_active
+            and target_user.role.name == "Administrator"
+            and new_role.name != "Administrator"
+        ):
+            active_admin_count = (
+                User.query
+                .join(Role)
+                .filter(
+                    User.is_active.is_(True),
+                    Role.is_active.is_(True),
+                    Role.name == "Administrator"
+                )
+                .count()
+            )
 
+            if active_admin_count <= 1:
+                raise ValueError(
+                    "The last active Administrator cannot be demoted."
+                )
+
+        old_role = target_user.role.name
         target_user.role_id = new_role.role_id
 
         UserSession.query.filter_by(
