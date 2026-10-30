@@ -224,6 +224,8 @@ The service layer prevents invalid gallery states, including:
 - Duplicate gallery entry.
 - Gallery exit while outside.
 - Room entry while outside the gallery.
+- Room entry when the room has reached its configured capacity.
+- Room capacity cannot be lowered below its current occupancy.
 - Occupying multiple rooms simultaneously.
 - Leaving a room the person does not currently occupy.
 - Leaving the gallery while still inside a room.

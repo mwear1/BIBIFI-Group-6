@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Barrier
 
 import app as app_module
 from database import db
@@ -295,3 +297,154 @@ def test_event_date_range_and_pagination_boundaries(api_app):
     ]
     for query in invalid_queries:
         assert client.get("/api/events" + query).status_code == 400
+
+
+
+def test_room_entry_is_rejected_when_configured_capacity_is_full(api_app):
+    application, data = api_app
+    admin = application.test_client()
+    employee = application.test_client()
+    admin_login = login(admin, "admin", "Administrator-password-123")
+    employee_login = login(employee, "employee", "Employee-password-123")
+    room_id = data["room_id"]
+
+    configured = admin.put(
+        f"/api/admin/rooms/{room_id}",
+        json={"capacity": 1},
+        headers=csrf_headers(admin_login),
+    )
+    assert configured.status_code == 200
+
+    with application.app_context():
+        second_person = Person(name="Second Visitor", identifier="TEST-002")
+        db.session.add(second_person)
+        db.session.commit()
+        second_person_id = second_person.person_id
+
+    first_gallery_entry = employee.post(
+        "/api/events/gallery/entry",
+        json={"person_id": data["person_id"]},
+        headers=csrf_headers(employee_login),
+    )
+    first_room_entry = employee.post(
+        f"/api/events/rooms/{room_id}/entry",
+        json={"person_id": data["person_id"]},
+        headers=csrf_headers(employee_login),
+    )
+    second_gallery_entry = employee.post(
+        "/api/events/gallery/entry",
+        json={"person_id": second_person_id},
+        headers=csrf_headers(employee_login),
+    )
+    rejected_room_entry = employee.post(
+        f"/api/events/rooms/{room_id}/entry",
+        json={"person_id": second_person_id},
+        headers=csrf_headers(employee_login),
+    )
+
+    assert first_gallery_entry.status_code == first_room_entry.status_code == 201
+    assert second_gallery_entry.status_code == 201
+    assert rejected_room_entry.status_code == 400
+    assert rejected_room_entry.json["error"] == "Room is at capacity."
+    occupancy = employee.get(f"/api/occupancy/rooms/{room_id}")
+    assert occupancy.status_code == 200
+    assert occupancy.json["count"] == 1
+    assert occupancy.json["people"][0]["person_id"] == data["person_id"]
+
+
+def test_room_capacity_cannot_be_lowered_below_current_occupancy(api_app):
+    application, data = api_app
+    admin = application.test_client()
+    employee = application.test_client()
+    admin_login = login(admin, "admin", "Administrator-password-123")
+    employee_login = login(employee, "employee", "Employee-password-123")
+    room_id = data["room_id"]
+
+    configured = admin.put(
+        f"/api/admin/rooms/{room_id}",
+        json={"capacity": 3},
+        headers=csrf_headers(admin_login),
+    )
+    assert configured.status_code == 200
+
+    with application.app_context():
+        visitors = [
+            Person(name=f"Visitor {index}", identifier=f"CAP-{index}")
+            for index in (1, 2)
+        ]
+        db.session.add_all(visitors)
+        db.session.commit()
+        person_ids = [visitor.person_id for visitor in visitors]
+
+    for person_id in person_ids:
+        assert employee.post(
+            "/api/events/gallery/entry",
+            json={"person_id": person_id},
+            headers=csrf_headers(employee_login),
+        ).status_code == 201
+        assert employee.post(
+            f"/api/events/rooms/{room_id}/entry",
+            json={"person_id": person_id},
+            headers=csrf_headers(employee_login),
+        ).status_code == 201
+
+    rejected = admin.put(
+        f"/api/admin/rooms/{room_id}",
+        json={"capacity": 1},
+        headers=csrf_headers(admin_login),
+    )
+    assert rejected.status_code == 400
+    assert "current room occupancy" in rejected.json["error"]
+
+    rooms = admin.get("/api/admin/rooms")
+    room = next(item for item in rooms.json["rooms"] if item["room_id"] == room_id)
+    assert room["capacity"] == 3
+
+
+def test_concurrent_room_entries_cannot_exceed_capacity(file_backed_api_app):
+    application, data = file_backed_api_app
+    with application.app_context():
+        room = Room.query.one()
+        room.capacity = 1
+        second_person = Person(name="Second Visitor", identifier="RACE-002")
+        db.session.add(second_person)
+        db.session.commit()
+        room_id = room.room_id
+        person_ids = [data["person_id"], second_person.person_id]
+
+    clients = [application.test_client(), application.test_client()]
+    tokens = []
+    for client in clients:
+        response = login(client, "employee", "Employee-password-123")
+        assert response.status_code == 200
+        tokens.append(response.json["csrf_token"])
+
+    for client, token, person_id in zip(clients, tokens, person_ids):
+        response = client.post(
+            "/api/events/gallery/entry",
+            json={"person_id": person_id},
+            headers={"X-CSRF-Token": token},
+        )
+        assert response.status_code == 201
+
+    gate = Barrier(2)
+
+    def enter_room(index):
+        gate.wait(timeout=5)
+        response = clients[index].post(
+            f"/api/events/rooms/{room_id}/entry",
+            json={"person_id": person_ids[index]},
+            headers={"X-CSRF-Token": tokens[index]},
+        )
+        return response.status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(enter_room, (0, 1)))
+
+    assert sorted(statuses) == [201, 400]
+    with application.app_context():
+        room_entries = GalleryEvent.query.filter_by(
+            room_id=room_id,
+            event_type="ROOM_ENTER",
+        ).all()
+        assert len(room_entries) == 1

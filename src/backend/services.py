@@ -11,6 +11,14 @@ def _acquire_person_movement_write_lock(person_id):
         synchronize_session=False,
     )
 
+
+def _acquire_room_capacity_write_lock(room_id):
+    """Acquire SQLite's writer lock before checking or changing capacity."""
+    db.session.query(Room).filter_by(room_id=room_id).update(
+        {Room.room_id: Room.room_id},
+        synchronize_session=False,
+    )
+
 def get_active_person(person_id):
     """Return an active tracked person or raise an error."""
     person = Person.query.filter_by(
@@ -224,6 +232,14 @@ def record_room_entry(person_id, room_id, user_id):
         # A person cannot occupy multiple rooms simultaneously.
         if get_current_room(person.person_id) is not None:
             raise ValueError("Person is already inside a room.")
+
+        # A configured capacity is a hard limit. The movement write lock above
+        # serializes this occupancy check with concurrent room-entry requests.
+        if (
+            room.capacity is not None
+            and len(get_room_occupancy(room.room_id)) >= room.capacity
+        ):
+            raise ValueError("Room is at capacity.")
 
         event = GalleryEvent(
             person_id=person.person_id,
@@ -766,6 +782,7 @@ def update_room(target_room_id, admin_user_id, **changes):
     """Update an allowlisted room profile without deleting its history."""
     try:
         admin = require_admin(admin_user_id)
+        _acquire_room_capacity_write_lock(target_room_id)
         room = db.session.get(Room, target_room_id)
         if room is None:
             raise ValueError("Room not found.")
@@ -792,6 +809,12 @@ def update_room(target_room_id, admin_user_id, **changes):
             value = changes["capacity"]
             if value is not None and (type(value) is not int or value < 1):
                 raise ValueError("capacity must be a positive integer or null.")
+            if value is not None and room.is_active:
+                occupancy = len(get_room_occupancy(room.room_id))
+                if value < occupancy:
+                    raise ValueError(
+                        "Capacity cannot be lower than current room occupancy."
+                    )
             room.capacity = value
         write_audit_log(
             user_id=admin.user_id, action="ROOM_UPDATED", target_type="Room",
