@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Administration{% endblock %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">ADMINISTRATION</div><h1>Manage the gallery</h1><p class="muted">Manage accounts, tracked people, rooms, and security activity.</p></div></div>
+<div class="admin-grid">
+<section class="panel"><h2>Create account</h2><form class="form-stack" data-admin-form="user"><label>Username<input name="username" required maxlength="80"></label><label>Full name<input name="full_name" maxlength="100"></label><label>Email<input name="email" type="email" maxlength="120"></label><label>Temporary password<input name="password" type="password" required minlength="12" autocomplete="new-password"></label><label>Role<select name="role"><option>Guest</option><option>Employee</option><option>Administrator</option></select></label><button class="button button-primary">Create account</button></form></section>
+<section class="panel"><h2>Add tracked person</h2><form class="form-stack" data-admin-form="person"><label>Name<input name="name" required maxlength="100"></label><label>Identifier<input name="identifier" required maxlength="100"></label><button class="button button-primary">Add person</button></form></section>
+<section class="panel"><h2>Add room</h2><form class="form-stack" data-admin-form="room"><label>Room name<input name="name" required maxlength="100"></label><label>Description<input name="description" maxlength="255"></label><label>Capacity<input name="capacity" type="number" min="1"></label><button class="button button-primary">Add room</button></form></section>
+<section class="panel"><h2>Accounts</h2><div class="table-wrap"><table><thead><tr><th>Account</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody data-users><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div></section>
+<section class="panel"><h2>Tracked people</h2><div class="table-wrap"><table><thead><tr><th>Name</th><th>Identifier</th><th>Status</th><th>Actions</th></tr></thead><tbody data-admin-persons><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div></section>
+<section class="panel"><h2>Rooms</h2><div class="table-wrap"><table><thead><tr><th>Room</th><th>Capacity</th><th>Status</th><th>Actions</th></tr></thead><tbody data-admin-rooms><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div></section>
+<section class="panel"><h2>Security audit</h2><div class="table-wrap"><table><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Result</th></tr></thead><tbody data-audit><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div></section>
+</div>
+{% endblock %}

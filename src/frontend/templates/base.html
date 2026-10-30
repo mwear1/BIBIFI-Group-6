@@ -1,0 +1,30 @@
+{% set csrf = session.get('csrf_token', '') %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf }}">
+  <title>{% block title %}Gallery Tracker{% endblock %} · Gallery Tracker</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('dashboard_page') if g.current_user else url_for('login_page') }}">Gallery Tracker</a>
+    {% if g.current_user %}
+    <nav aria-label="Main navigation">
+      <a href="{{ url_for('dashboard_page') }}">Dashboard</a>
+      {% if g.current_user.role.name in ['Employee', 'Administrator'] %}<a href="{{ url_for('events_page') }}">Events</a>{% endif %}
+      {% if g.current_user.role.name == 'Administrator' %}<a href="{{ url_for('admin_page') }}">Administration</a>{% endif %}
+    </nav>
+    <div class="account"><span>{{ g.current_user.username }} · {{ g.current_user.role.name }}</span><button class="button button-quiet" data-logout>Log out</button></div>
+    {% endif %}
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+    <div class="notice" role="status" aria-live="polite" data-notice hidden></div>
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<section class="login-wrap">
+  <div class="eyebrow">SECURE GALLERY ACCESS</div>
+  <h1>Welcome back</h1>
+  <p class="muted">Sign in with your gallery account to continue.</p>
+  <form class="panel form-stack" data-login-form>
+    <label>Username<input name="username" autocomplete="username" required maxlength="80"></label>
+    <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="button button-primary" type="submit">Sign in</button>
+  </form>
+</section>
+{% endblock %}

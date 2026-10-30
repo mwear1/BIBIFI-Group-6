@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">OVERVIEW</div><h1>Gallery dashboard</h1><p class="muted">Current attendance and room activity.</p></div><a class="button button-primary" href="{{ url_for('events_page') }}" {% if current_user.role.name == 'Guest' %}hidden{% endif %}>Record an event</a></div>
+{% if current_user.role.name in ["Employee", "Administrator"] %}<div class="stats-grid" data-stats>
+  <article class="stat-card"><span class="muted">People in gallery</span><strong data-gallery-count>—</strong></article>
+  <article class="stat-card"><span class="muted">Active rooms</span><strong data-room-count>—</strong></article>
+  <article class="stat-card"><span class="muted">Recent events</span><strong data-event-count>—</strong></article>
+</div>
+<section class="section"><div class="section-heading"><div><h2>Room occupancy</h2><p class="muted">Live count compared with each room’s capacity.</p></div></div><div class="room-grid" data-room-grid><p class="muted">Loading…</p></div></section>
+<section class="section"><div class="section-heading"><div><h2>Recent movement</h2><p class="muted">Latest recorded entries and exits.</p></div><a href="{{ url_for('events_page') }}" {% if current_user.role.name == 'Guest' %}hidden{% endif %}>View history →</a></div><div class="table-wrap"><table><thead><tr><th>Person</th><th>Event</th><th>Room</th><th>Time</th><th>Recorded by</th></tr></thead><tbody data-recent-events><tr><td colspan="5" class="muted">Loading…</td></tr></tbody></table></div></section>
+{% else %}<section class="panel"><h2>Your account</h2><p>You are signed in as <strong>{{ current_user.username }}</strong> with the Guest role.</p><p class="muted">Gallery occupancy and movement records are available to authorized gallery staff.</p></section>{% endif %}
+{% endblock %}

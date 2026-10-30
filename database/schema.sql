@@ -29,6 +29,30 @@ CREATE TABLE IF NOT EXISTS users (
         REFERENCES roles(role_id)
 );
 
+-- Stores revocable authenticated browser sessions.
+-- The database stores only a hash of the token held in the signed cookie.
+CREATE TABLE IF NOT EXISTS user_sessions (
+    session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL,
+    last_seen_at DATETIME,
+    revoked_at DATETIME,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_user_sessions_user_id
+    ON user_sessions(user_id);
+
+-- Stores hashed per-client login throttling state; raw IP addresses are not persisted.
+CREATE TABLE IF NOT EXISTS login_throttles (
+    ip_hash CHAR(64) PRIMARY KEY,
+    window_started_at DATETIME NOT NULL,
+    failure_count INTEGER NOT NULL DEFAULT 0 CHECK (failure_count >= 0),
+    blocked_until DATETIME
+);
+
 
 -- Stores people whose physical location is tracked in the gallery.
 CREATE TABLE IF NOT EXISTS persons (

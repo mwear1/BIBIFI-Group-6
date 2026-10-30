@@ -41,6 +41,7 @@ def test_schema_creates_required_tables():
     expected_tables = {
         "roles",
         "users",
+        "login_throttles",
         "persons",
         "rooms",
         "gallery_events",

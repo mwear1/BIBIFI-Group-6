@@ -1,4 +1,5 @@
 from database import db
+from sqlalchemy import event as sqlalchemy_event
 from werkzeug.security import generate_password_hash, check_password_hash
 
 
@@ -62,6 +63,33 @@ class User(db.Model):
 
     def __repr__(self):
         return f"<User {self.username}>"
+
+class UserSession(db.Model):
+    """Server-side login session that can be revoked on logout."""
+
+    __tablename__ = "user_sessions"
+
+    session_id = db.Column(db.Integer, primary_key=True)
+    token_hash = db.Column(db.String(64), unique=True, nullable=False)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey("users.user_id"),
+        nullable=False,
+        index=True,
+    )
+    created_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        server_default=db.func.now(),
+    )
+    expires_at = db.Column(db.DateTime, nullable=False)
+    last_seen_at = db.Column(db.DateTime)
+    revoked_at = db.Column(db.DateTime)
+
+    user = db.relationship("User", backref="sessions")
+
+    def __repr__(self):
+        return f"<UserSession {self.session_id}>"
 
 class Person(db.Model):
     __tablename__ = "persons"
@@ -193,3 +221,51 @@ class AuditLog(db.Model):
 
     def __repr__(self):
         return f"<AuditLog {self.action}>"
+
+class LoginThrottle(db.Model):
+    """Persistent per-client login failure window; stores no raw IP address."""
+
+    __tablename__ = "login_throttles"
+
+    ip_hash = db.Column(db.String(64), primary_key=True)
+    window_started_at = db.Column(db.DateTime, nullable=False)
+    failure_count = db.Column(db.Integer, nullable=False, default=0)
+    blocked_until = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "failure_count >= 0",
+            name="ck_login_throttles_failure_count",
+        ),
+    )
+
+    def __repr__(self):
+        return f"<LoginThrottle {self.ip_hash[:8]}>"
+
+
+@sqlalchemy_event.listens_for(AuditLog, "before_update")
+@sqlalchemy_event.listens_for(AuditLog, "before_delete")
+def _reject_audit_log_mutation(mapper, connection, target):
+    """Keep application-level audit records append-only."""
+    raise ValueError("Audit log records cannot be changed or deleted.")
+
+
+def install_audit_log_triggers(connection):
+    """Reject SQLite bulk and direct SQL changes to audit rows."""
+    if connection.dialect.name != "sqlite":
+        return
+    connection.exec_driver_sql("""
+        CREATE TRIGGER IF NOT EXISTS prevent_audit_logs_update
+        BEFORE UPDATE ON audit_logs
+        BEGIN SELECT RAISE(ABORT, 'audit logs are append-only'); END
+    """)
+    connection.exec_driver_sql("""
+        CREATE TRIGGER IF NOT EXISTS prevent_audit_logs_delete
+        BEFORE DELETE ON audit_logs
+        BEGIN SELECT RAISE(ABORT, 'audit logs are append-only'); END
+    """)
+
+
+@sqlalchemy_event.listens_for(AuditLog.__table__, "after_create")
+def _install_audit_log_triggers_after_create(target, connection, **kwargs):
+    install_audit_log_triggers(connection)

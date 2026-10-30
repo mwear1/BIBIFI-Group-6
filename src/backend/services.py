@@ -1,5 +1,15 @@
+from datetime import datetime, time, timedelta
+
 from database import db
-from models import Role, User, Person, Room, GalleryEvent, AuditLog
+from models import Role, User, UserSession, Person, Room, GalleryEvent, AuditLog
+
+
+def _acquire_person_movement_write_lock(person_id):
+    """Acquire SQLite's writer lock before reading movement state."""
+    db.session.query(Person).filter_by(person_id=person_id).update(
+        {Person.person_id: Person.person_id},
+        synchronize_session=False,
+    )
 
 def get_active_person(person_id):
     """Return an active tracked person or raise an error."""
@@ -106,6 +116,7 @@ def record_gallery_entry(person_id, user_id):
     """Record a valid gallery entry."""
 
     try:
+        _acquire_person_movement_write_lock(person_id)
         person = get_active_person(person_id)
         user = require_event_recorder(user_id)
 
@@ -147,6 +158,7 @@ def record_gallery_exit(person_id, user_id):
     """Record a valid gallery exit."""
 
     try:
+        _acquire_person_movement_write_lock(person_id)
         person = get_active_person(person_id)
         user = require_event_recorder(user_id)
 
@@ -191,6 +203,7 @@ def record_room_entry(person_id, room_id, user_id):
     """Record a valid room entry."""
 
     try:
+        _acquire_person_movement_write_lock(person_id)
         person = get_active_person(person_id)
         user = require_event_recorder(user_id)
 
@@ -243,6 +256,7 @@ def record_room_exit(person_id, room_id, user_id):
     """Record a valid room exit."""
 
     try:
+        _acquire_person_movement_write_lock(person_id)
         person = get_active_person(person_id)
         user = require_event_recorder(user_id)
 
@@ -361,43 +375,45 @@ def get_event_history(
     person_id=None,
     room_id=None,
     event_type=None,
-    limit=100
+    limit=100,
+    page=1,
+    date_from=None,
+    date_to=None,
 ):
-    """Return gallery events using optional search filters."""
-
+    """Return one bounded page of optionally date-filtered gallery events."""
     query = GalleryEvent.query
-
     if person_id is not None:
-        query = query.filter(
-            GalleryEvent.person_id == person_id
-        )
-
+        query = query.filter(GalleryEvent.person_id == person_id)
     if room_id is not None:
-        query = query.filter(
-            GalleryEvent.room_id == room_id
-        )
-
+        query = query.filter(GalleryEvent.room_id == room_id)
     if event_type is not None:
-        if event_type not in {
-            "GALLERY_ENTER",
-            "GALLERY_EXIT",
-            "ROOM_ENTER",
-            "ROOM_EXIT"
-        }:
+        if event_type not in {"GALLERY_ENTER", "GALLERY_EXIT", "ROOM_ENTER", "ROOM_EXIT"}:
             raise ValueError("Invalid event type.")
-
-        query = query.filter(
-            GalleryEvent.event_type == event_type
-        )
-
-    # Limit large searches to protect database resources.
-    if limit < 1 or limit > 500:
+        query = query.filter(GalleryEvent.event_type == event_type)
+    if type(limit) is not int or limit < 1 or limit > 500:
         raise ValueError("Limit must be between 1 and 500.")
-
+    if type(page) is not int or page < 1 or page > 10000:
+        raise ValueError("Page must be between 1 and 10000.")
+    if (date_from is None) != (date_to is None):
+        raise ValueError("date_from and date_to must be provided together.")
+    if date_from is not None:
+        try:
+            first_day = datetime.strptime(date_from, "%Y-%m-%d").date()
+            last_day = datetime.strptime(date_to, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            raise ValueError("Dates must use YYYY-MM-DD format.")
+        if last_day < first_day:
+            raise ValueError("date_to must not be earlier than date_from.")
+        if (last_day - first_day).days > 365:
+            raise ValueError("Date range cannot exceed 366 days.")
+        query = query.filter(
+            GalleryEvent.timestamp >= datetime.combine(first_day, time.min),
+            GalleryEvent.timestamp < datetime.combine(last_day + timedelta(days=1), time.min),
+        )
     return (
-        query
-        .order_by(GalleryEvent.event_id.desc())
+        query.order_by(GalleryEvent.event_id.desc())
         .limit(limit)
+        .offset((page - 1) * limit)
         .all()
     )
 
@@ -496,6 +512,14 @@ def disable_user(target_user_id, admin_user_id):
 
         target_user.is_active = False
 
+        UserSession.query.filter_by(
+            user_id=target_user.user_id,
+            revoked_at=None
+        ).update(
+            {UserSession.revoked_at: db.func.now()},
+            synchronize_session=False
+        )
+
         write_audit_log(
             user_id=admin.user_id,
             action="USER_DISABLED",
@@ -537,6 +561,14 @@ def change_user_role(target_user_id, new_role_name, admin_user_id):
         old_role = target_user.role.name
 
         target_user.role_id = new_role.role_id
+
+        UserSession.query.filter_by(
+            user_id=target_user.user_id,
+            revoked_at=None
+        ).update(
+            {UserSession.revoked_at: db.func.now()},
+            synchronize_session=False
+        )
 
         write_audit_log(
             user_id=admin.user_id,
@@ -626,6 +658,251 @@ def create_person(name, identifier, admin_user_id):
 
         return person
 
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def update_user(target_user_id, admin_user_id, **changes):
+    """Update allowlisted account fields and revoke sessions on password change."""
+    try:
+        admin = require_admin(admin_user_id)
+        target = db.session.get(User, target_user_id)
+        if target is None:
+            raise ValueError("User not found.")
+        allowed = {"username", "full_name", "email", "password"}
+        if not changes or set(changes) - allowed:
+            raise ValueError("Provide valid account fields to update.")
+        if "username" in changes:
+            username = changes["username"]
+            if not isinstance(username, str) or not username.strip() or len(username) > 80:
+                raise ValueError("username must contain 1 to 80 characters.")
+            username = username.strip()
+            duplicate = User.query.filter(
+                User.username == username, User.user_id != target_user_id
+            ).first()
+            if duplicate:
+                raise ValueError("Username already exists.")
+            target.username = username
+        if "full_name" in changes:
+            value = changes["full_name"]
+            if value is not None and (not isinstance(value, str) or len(value) > 100):
+                raise ValueError("full_name must be at most 100 characters.")
+            target.full_name = value
+        if "email" in changes:
+            value = changes["email"] or None
+            if value is not None and (not isinstance(value, str) or len(value) > 120):
+                raise ValueError("email must be at most 120 characters.")
+            duplicate = User.query.filter(
+                User.email == value, User.user_id != target_user_id
+            ).first() if value else None
+            if duplicate:
+                raise ValueError("Email already exists.")
+            target.email = value
+        password_changed = "password" in changes
+        if password_changed:
+            password = changes["password"]
+            if not isinstance(password, str) or not 12 <= len(password) <= 1024:
+                raise ValueError("password must contain 12 to 1024 characters.")
+            target.set_password(password)
+            UserSession.query.filter_by(
+                user_id=target.user_id, revoked_at=None
+            ).update(
+                {UserSession.revoked_at: db.func.now()},
+                synchronize_session=False,
+            )
+        write_audit_log(
+            user_id=admin.user_id,
+            action="USER_UPDATED",
+            target_type="User",
+            target_id=target.user_id,
+            result="SUCCESS",
+            details="Updated account fields: " + ", ".join(sorted(changes)),
+        )
+        db.session.commit()
+        return target
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def set_user_active(target_user_id, active, admin_user_id):
+    """Enable or disable an account while preserving its history."""
+    try:
+        admin = require_admin(admin_user_id)
+        target = db.session.get(User, target_user_id)
+        if target is None:
+            raise ValueError("User not found.")
+        if type(active) is not bool:
+            raise ValueError("active must be a boolean.")
+        if target.is_active == active:
+            raise ValueError("Account already has the requested status.")
+        if not active and target.user_id == admin.user_id:
+            raise ValueError("Administrators cannot disable their own account.")
+        target.is_active = active
+        if not active:
+            UserSession.query.filter_by(
+                user_id=target.user_id, revoked_at=None
+            ).update(
+                {UserSession.revoked_at: db.func.now()},
+                synchronize_session=False,
+            )
+        write_audit_log(
+            user_id=admin.user_id,
+            action="USER_ENABLED" if active else "USER_DISABLED",
+            target_type="User",
+            target_id=target.user_id,
+            result="SUCCESS",
+            details=f"User account '{target.username}' was {'enabled' if active else 'disabled'}.",
+        )
+        db.session.commit()
+        return target
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def update_room(target_room_id, admin_user_id, **changes):
+    """Update an allowlisted room profile without deleting its history."""
+    try:
+        admin = require_admin(admin_user_id)
+        room = db.session.get(Room, target_room_id)
+        if room is None:
+            raise ValueError("Room not found.")
+        allowed = {"name", "description", "capacity"}
+        if not changes or set(changes) - allowed:
+            raise ValueError("Provide valid room fields to update.")
+        if "name" in changes:
+            value = changes["name"]
+            if not isinstance(value, str) or not value.strip() or len(value) > 100:
+                raise ValueError("name must contain 1 to 100 characters.")
+            value = value.strip()
+            duplicate = Room.query.filter(
+                Room.name == value, Room.room_id != room.room_id
+            ).first()
+            if duplicate:
+                raise ValueError("Room name already exists.")
+            room.name = value
+        if "description" in changes:
+            value = changes["description"]
+            if value is not None and (not isinstance(value, str) or len(value) > 255):
+                raise ValueError("description must be at most 255 characters.")
+            room.description = value
+        if "capacity" in changes:
+            value = changes["capacity"]
+            if value is not None and (type(value) is not int or value < 1):
+                raise ValueError("capacity must be a positive integer or null.")
+            room.capacity = value
+        write_audit_log(
+            user_id=admin.user_id, action="ROOM_UPDATED", target_type="Room",
+            target_id=room.room_id, result="SUCCESS",
+            details="Updated room fields: " + ", ".join(sorted(changes)),
+        )
+        db.session.commit()
+        return room
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def set_room_active(target_room_id, active, admin_user_id):
+    """Enable or disable a room, retaining all associated event history."""
+    try:
+        admin = require_admin(admin_user_id)
+        room = db.session.get(Room, target_room_id)
+        if room is None:
+            raise ValueError("Room not found.")
+        if type(active) is not bool:
+            raise ValueError("active must be a boolean.")
+        if room.is_active == active:
+            raise ValueError("Room already has the requested status.")
+        if not active:
+            occupants = []
+            for person in Person.query.filter_by(is_active=True).all():
+                current = get_current_room(person.person_id)
+                if current is not None and current.room_id == room.room_id:
+                    occupants.append(person)
+            if occupants:
+                raise ValueError("A room cannot be disabled while people are inside.")
+        room.is_active = active
+        write_audit_log(
+            user_id=admin.user_id,
+            action="ROOM_ENABLED" if active else "ROOM_DISABLED",
+            target_type="Room", target_id=room.room_id, result="SUCCESS",
+            details=f"Room '{room.name}' was {'enabled' if active else 'disabled'}.",
+        )
+        db.session.commit()
+        return room
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def update_person(target_person_id, admin_user_id, **changes):
+    """Update a tracked person's identifying information."""
+    try:
+        admin = require_admin(admin_user_id)
+        person = db.session.get(Person, target_person_id)
+        if person is None:
+            raise ValueError("Person not found.")
+        allowed = {"name", "identifier"}
+        if not changes or set(changes) - allowed:
+            raise ValueError("Provide valid person fields to update.")
+        if "name" in changes:
+            value = changes["name"]
+            if not isinstance(value, str) or not value.strip() or len(value) > 100:
+                raise ValueError("name must contain 1 to 100 characters.")
+            person.name = value.strip()
+        if "identifier" in changes:
+            value = changes["identifier"]
+            if not isinstance(value, str) or not value.strip() or len(value) > 100:
+                raise ValueError("identifier must contain 1 to 100 characters.")
+            value = value.strip()
+            duplicate = Person.query.filter(
+                Person.identifier == value, Person.person_id != person.person_id
+            ).first()
+            if duplicate:
+                raise ValueError("Person identifier already exists.")
+            person.identifier = value
+        write_audit_log(
+            user_id=admin.user_id, action="PERSON_UPDATED",
+            target_type="Person", target_id=person.person_id,
+            result="SUCCESS",
+            details="Updated tracked-person fields: " + ", ".join(sorted(changes)),
+        )
+        db.session.commit()
+        return person
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def set_person_active(target_person_id, active, admin_user_id):
+    """Enable or disable a tracked person without invalidating occupancy state."""
+    try:
+        admin = require_admin(admin_user_id)
+        person = db.session.get(Person, target_person_id)
+        if person is None:
+            raise ValueError("Person not found.")
+        if type(active) is not bool:
+            raise ValueError("active must be a boolean.")
+        if person.is_active == active:
+            raise ValueError("Person already has the requested status.")
+        if not active and (
+            is_inside_gallery(person.person_id)
+            or get_current_room(person.person_id) is not None
+        ):
+            raise ValueError("A person must exit the gallery before being disabled.")
+        person.is_active = active
+        write_audit_log(
+            user_id=admin.user_id,
+            action="PERSON_ENABLED" if active else "PERSON_DISABLED",
+            target_type="Person", target_id=person.person_id,
+            result="SUCCESS",
+            details=f"Tracked person '{person.name}' was {'enabled' if active else 'disabled'}.",
+        )
+        db.session.commit()
+        return person
     except Exception:
         db.session.rollback()
         raise
