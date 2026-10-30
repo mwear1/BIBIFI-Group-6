@@ -253,10 +253,4 @@ Current tests cover:
 - Role-matrix checks, privilege-field allowlisting, SQL-injection payload handling, XSS-safe rendering, security headers, information-disclosure handling, production-cookie configuration, and append-only audit behavior.
 - Database schema and seed data, business-logic validation, valid movement sequences, event ordering, audit logging, and database constraints.
 
-## Current Limitations
-
-- Security tests cover representative attack cases; they are not a substitute for the instructor's correctness oracle or a full independent penetration test.
-- The login throttle is keyed by `REMOTE_ADDR`; deployments behind a reverse proxy must configure trusted client-address handling before exposing the service.
-- Production deployment still requires HTTPS, a protected stable `FLASK_SECRET_KEY`, and a production WSGI server.
-
 
