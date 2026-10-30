@@ -2,7 +2,7 @@
 .pytest_cache/
 __pycache__/
 *.pyc
-
+.vscode/
 instance/
 *.db
 *.sqlite
