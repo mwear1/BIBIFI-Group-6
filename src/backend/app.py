@@ -572,10 +572,26 @@ def login():
 @app.post("/api/auth/logout")
 @login_required
 def logout():
-    g.auth_session.revoked_at = _utc_now()
-    _audit("LOGOUT", "SUCCESS", user_id=g.current_user.user_id)
+    now = _utc_now()
+
+    UserSession.query.filter(
+        UserSession.user_id == g.current_user.user_id,
+        UserSession.revoked_at.is_(None),
+    ).update(
+        {UserSession.revoked_at: now},
+        synchronize_session=False,
+    )
+
+    _audit(
+        "LOGOUT",
+        "SUCCESS",
+        user_id=g.current_user.user_id,
+        details="All active sessions for the user were revoked.",
+    )
+
     db.session.commit()
     session.clear()
+
     response = jsonify({"message": "Logged out."})
     response.headers["Cache-Control"] = "no-store"
     return response

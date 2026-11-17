@@ -786,3 +786,52 @@ def test_room_capacity_cannot_drop_below_current_occupancy(api_app):
         )
 
         assert room.capacity == 5
+
+
+def test_logout_revokes_all_sessions_for_user(api_app):
+    application, data = api_app
+
+    session_a = application.test_client()
+    session_b = application.test_client()
+
+    auth_a = login(
+        session_a,
+        "employee",
+        "Employee-password-123",
+    )
+    auth_b = login(
+        session_b,
+        "employee",
+        "Employee-password-123",
+    )
+
+    assert auth_a.status_code == 200
+    assert auth_b.status_code == 200
+
+    # Both sessions should initially be valid.
+    assert session_a.get("/api/auth/me").status_code == 200
+    assert session_b.get("/api/auth/me").status_code == 200
+
+    # Logging out from session B should revoke every active
+    # session belonging to this account.
+    logout_response = session_b.post(
+        "/api/auth/logout",
+        headers={
+            "X-CSRF-Token": auth_b.json["csrf_token"]
+        },
+    )
+
+    assert logout_response.status_code == 200
+
+    # The other previously valid session must now be unusable.
+    assert session_a.get("/api/auth/me").status_code == 401
+    assert session_b.get("/api/auth/me").status_code == 401
+
+    with application.app_context():
+        sessions = UserSession.query.filter_by(
+            user_id=data["users"]["employee"]
+        ).all()
+
+        assert len(sessions) == 2
+        assert all(item.revoked_at is not None for item in sessions)
+        
