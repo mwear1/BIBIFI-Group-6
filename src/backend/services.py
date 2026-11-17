@@ -853,6 +853,8 @@ def set_room_active(target_room_id, active, admin_user_id):
     """Enable or disable a room, retaining all associated event history."""
     try:
         admin = require_admin(admin_user_id)
+        _acquire_room_capacity_write_lock(target_room_id)
+        
         room = db.session.get(Room, target_room_id)
         if room is None:
             raise ValueError("Room not found.")
@@ -925,6 +927,8 @@ def set_person_active(target_person_id, active, admin_user_id):
     """Enable or disable a tracked person without invalidating occupancy state."""
     try:
         admin = require_admin(admin_user_id)
+        _acquire_person_movement_write_lock(target_person_id)
+
         person = db.session.get(Person, target_person_id)
         if person is None:
             raise ValueError("Person not found.")
