@@ -92,10 +92,13 @@ def file_backed_api_app(api_app, tmp_path):
         db.session.flush()
         employee = User(username="employee", role_id=roles["Employee"].role_id)
         employee.set_password("Employee-password-123")
+        admin = User(username="admin", role_id=roles["Administrator"].role_id)
+        admin.set_password("Administrator-password-123")
         person = Person(name="Concurrent Visitor", identifier="CONCURRENT-001")
-        db.session.add_all([employee, person, Room(name="Concurrency Test Room")])
+        room = Room(name="Concurrency Test Room")
+        db.session.add_all([employee, admin, person, room])
         db.session.commit()
-        data = {"person_id": person.person_id}
+        data = {"person_id": person.person_id, "room_id": room.room_id}
 
     yield application, data
 

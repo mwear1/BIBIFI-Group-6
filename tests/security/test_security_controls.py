@@ -786,3 +786,144 @@ def test_room_capacity_cannot_drop_below_current_occupancy(api_app):
         )
 
         assert room.capacity == 5
+
+
+def test_person_disable_and_gallery_entry_are_serialized(file_backed_api_app):
+    application, data = file_backed_api_app
+
+    employee = application.test_client()
+    admin = application.test_client()
+
+    employee_auth = login(
+        employee,
+        "employee",
+        "Employee-password-123",
+    )
+    admin_auth = login(
+        admin,
+        "admin",
+        "Administrator-password-123",
+    )
+
+    assert employee_auth.status_code == 200
+    assert admin_auth.status_code == 200
+
+    gate = Barrier(2)
+
+    def enter_gallery():
+        gate.wait(timeout=5)
+        return employee.post(
+            "/api/events/gallery/entry",
+            json={"person_id": data["person_id"]},
+            headers={
+                "X-CSRF-Token": employee_auth.json["csrf_token"]
+            },
+        ).status_code
+
+    def disable_person():
+        gate.wait(timeout=5)
+        return admin.post(
+            f"/api/admin/persons/{data['person_id']}/disable",
+            headers={
+                "X-CSRF-Token": admin_auth.json["csrf_token"]
+            },
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(enter_gallery),
+            pool.submit(disable_person),
+        ]
+        statuses = [future.result() for future in futures]
+
+    assert 400 in statuses
+    assert any(status in {200, 201} for status in statuses)
+
+    with application.app_context():
+        person = db.session.get(Person, data["person_id"])
+        events = GalleryEvent.query.filter_by(
+            person_id=data["person_id"]
+        ).all()
+
+        if person.is_active:
+            assert len(events) == 1
+            assert events[0].event_type == "GALLERY_ENTER"
+        else:
+            assert events == []
+
+
+def test_room_disable_and_room_entry_are_serialized(file_backed_api_app):
+    application, data = file_backed_api_app
+
+    employee = application.test_client()
+    admin = application.test_client()
+
+    employee_auth = login(
+        employee,
+        "employee",
+        "Employee-password-123",
+    )
+    admin_auth = login(
+        admin,
+        "admin",
+        "Administrator-password-123",
+    )
+
+    assert employee_auth.status_code == 200
+    assert admin_auth.status_code == 200
+
+    # A person must already be inside the gallery before entering a room.
+    gallery_entry = employee.post(
+        "/api/events/gallery/entry",
+        json={"person_id": data["person_id"]},
+        headers={
+            "X-CSRF-Token": employee_auth.json["csrf_token"]
+        },
+    )
+    assert gallery_entry.status_code == 201
+
+    gate = Barrier(2)
+
+    def enter_room():
+        gate.wait(timeout=5)
+        return employee.post(
+            f"/api/events/rooms/{data['room_id']}/entry",
+            json={"person_id": data["person_id"]},
+            headers={
+                "X-CSRF-Token": employee_auth.json["csrf_token"]
+            },
+        ).status_code
+
+    def disable_room():
+        gate.wait(timeout=5)
+        return admin.post(
+            f"/api/admin/rooms/{data['room_id']}/disable",
+            headers={
+                "X-CSRF-Token": admin_auth.json["csrf_token"]
+            },
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(enter_room),
+            pool.submit(disable_room),
+        ]
+        statuses = [future.result() for future in futures]
+
+    assert 400 in statuses
+    assert any(status in {200, 201} for status in statuses)
+
+    with application.app_context():
+        room = db.session.get(Room, data["room_id"])
+
+        room_entries = GalleryEvent.query.filter_by(
+            person_id=data["person_id"],
+            room_id=data["room_id"],
+            event_type="ROOM_ENTER",
+        ).all()
+
+        if room.is_active:
+            assert len(room_entries) == 1
+        else:
+            assert room_entries == []
+            
