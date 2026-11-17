@@ -786,3 +786,19 @@ def test_room_capacity_cannot_drop_below_current_occupancy(api_app):
         )
 
         assert room.capacity == 5
+
+
+def test_event_history_accepts_maximum_date_without_server_error(api_app):
+    application, _ = api_app
+    client = application.test_client()
+
+    auth = login(client, "employee", "Employee-password-123")
+    assert auth.status_code == 200
+
+    response = client.get(
+        "/api/events?date_from=9999-06-01&date_to=9999-12-31"
+    )
+
+    assert response.status_code == 200
+    assert "events" in response.json
+    

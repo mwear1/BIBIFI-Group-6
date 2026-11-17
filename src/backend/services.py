@@ -424,7 +424,7 @@ def get_event_history(
             raise ValueError("Date range cannot exceed 366 days.")
         query = query.filter(
             GalleryEvent.timestamp >= datetime.combine(first_day, time.min),
-            GalleryEvent.timestamp < datetime.combine(last_day + timedelta(days=1), time.min),
+            GalleryEvent.timestamp <= datetime.combine(last_day, time.max),
         )
     return (
         query.order_by(GalleryEvent.event_id.desc())
